@@ -34,7 +34,146 @@ jobs:
           mkdir -p android/app/src/main/java
           cp -r native-android/java/com android/app/src/main/java/
           cp -r native-android/res/* android/app/src/main/res/
-          sed -i 's/long at = (long) call.getDouble("at", 0d);/long at = call.getData().optLong("at", 0L);\n    if (at <= System.currentTimeMillis()) { call.resolve(); return; }/' android/app/src/main/java/com/example/timers/TimerBridgePlugin.java
+          D=android/app/src/main/java/com/example/timers
+          cat > $D/MainActivity.java <<'JAVA'
+          package com.example.timers;
+
+          import android.app.AlertDialog;
+          import android.content.Context;
+          import android.content.SharedPreferences;
+          import android.os.Bundle;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+          import com.getcapacitor.BridgeActivity;
+          import java.io.PrintWriter;
+          import java.io.StringWriter;
+
+          public class MainActivity extends BridgeActivity {
+            @Override
+            public void onCreate(Bundle savedInstanceState) {
+              final Context app = getApplicationContext();
+              final Thread.UncaughtExceptionHandler old = Thread.getDefaultUncaughtExceptionHandler();
+              Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
+                try {
+                  StringWriter sw = new StringWriter();
+                  e.printStackTrace(new PrintWriter(sw));
+                  app.getSharedPreferences("crash", Context.MODE_PRIVATE).edit().putString("last", sw.toString()).commit();
+                } catch (Throwable ignored) {}
+                if (old != null) old.uncaughtException(t, e);
+              });
+              registerPlugin(TimerBridgePlugin.class);
+              super.onCreate(savedInstanceState);
+              SharedPreferences sp = getSharedPreferences("crash", MODE_PRIVATE);
+              String last = sp.getString("last", null);
+              if (last != null) {
+                sp.edit().remove("last").commit();
+                TextView tv = new TextView(this);
+                tv.setText(last);
+                tv.setTextSize(10);
+                tv.setTextIsSelectable(true);
+                tv.setPadding(24, 24, 24, 24);
+                ScrollView sv = new ScrollView(this);
+                sv.addView(tv);
+                new AlertDialog.Builder(this).setTitle("Crash log").setView(sv).setPositiveButton("OK", null).show();
+              }
+            }
+          }
+          JAVA
+          cat > $D/TimerBridgePlugin.java <<'JAVA'
+          package com.example.timers;
+
+          import android.app.AlarmManager;
+          import android.app.PendingIntent;
+          import android.appwidget.AppWidgetManager;
+          import android.content.ComponentName;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.widget.Toast;
+          import com.getcapacitor.Plugin;
+          import com.getcapacitor.PluginCall;
+          import com.getcapacitor.PluginMethod;
+          import com.getcapacitor.annotation.CapacitorPlugin;
+
+          @CapacitorPlugin(name = "TimerBridge")
+          public class TimerBridgePlugin extends Plugin {
+
+            private void fail(PluginCall call, Throwable e) {
+              final String msg = e.toString();
+              try {
+                getActivity().runOnUiThread(() -> Toast.makeText(getContext(), msg, Toast.LENGTH_LONG).show());
+              } catch (Throwable ignored) {}
+              call.reject(msg);
+            }
+
+            @PluginMethod
+            public void scheduleAlarm(PluginCall call) {
+              try {
+                int id = call.getInt("id", 0);
+                String name = call.getString("name", "تايمر");
+                long at = call.getData().optLong("at", 0L);
+                if (at <= System.currentTimeMillis()) { call.resolve(); return; }
+                Context ctx = getContext();
+                AlarmManager am = (AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);
+
+                Intent alarm = new Intent(ctx, TimerAlarmReceiver.class);
+                alarm.putExtra("id", id);
+                alarm.putExtra("name", name);
+                PendingIntent op = PendingIntent.getBroadcast(ctx, id, alarm,
+                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+
+                Intent show = new Intent(ctx, MainActivity.class);
+                PendingIntent showIntent = PendingIntent.getActivity(ctx, id, show,
+                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+
+                am.setAlarmClock(new AlarmManager.AlarmClockInfo(at, showIntent), op);
+                call.resolve();
+              } catch (Throwable e) {
+                fail(call, e);
+              }
+            }
+
+            @PluginMethod
+            public void cancelAlarm(PluginCall call) {
+              try {
+                int id = call.getInt("id", 0);
+                Context ctx = getContext();
+                AlarmManager am = (AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);
+                Intent alarm = new Intent(ctx, TimerAlarmReceiver.class);
+                PendingIntent p = PendingIntent.getBroadcast(ctx, id, alarm,
+                    PendingIntent.FLAG_NO_CREATE | PendingIntent.FLAG_IMMUTABLE);
+                if (p != null) {
+                  am.cancel(p);
+                  p.cancel();
+                }
+                call.resolve();
+              } catch (Throwable e) {
+                fail(call, e);
+              }
+            }
+
+            @PluginMethod
+            public void saveSnapshot(PluginCall call) {
+              try {
+                String json = call.getString("json", "[]");
+                Context ctx = getContext();
+                ctx.getSharedPreferences("timers_widget", Context.MODE_PRIVATE)
+                    .edit().putString("snapshot", json).apply();
+
+                AppWidgetManager mgr = AppWidgetManager.getInstance(ctx);
+                int[] ids = mgr.getAppWidgetIds(new ComponentName(ctx, TimerWidgetProvider.class));
+                if (ids != null && ids.length > 0) {
+                  Intent i = new Intent(ctx, TimerWidgetProvider.class);
+                  i.setAction(AppWidgetManager.ACTION_APPWIDGET_UPDATE);
+                  i.putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, ids);
+                  ctx.sendBroadcast(i);
+                }
+                call.resolve();
+              } catch (Throwable e) {
+                fail(call, e);
+              }
+            }
+          }
+          JAVA
           python3 - <<'PY'
           import re
           p = "android/app/src/main/AndroidManifest.xml"
