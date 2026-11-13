@@ -34,7 +34,7 @@ jobs:
           mkdir -p android/app/src/main/java
           cp -r native-android/java/com android/app/src/main/java/
           cp -r native-android/res/* android/app/src/main/res/
-          sed -i 's/(long) call.getDouble("at", 0d)/call.getDouble("at", 0d).longValue()/' android/app/src/main/java/com/example/timers/TimerBridgePlugin.java
+          sed -i 's/long at = (long) call.getDouble("at", 0d);/long at = call.getData().optLong("at", 0L);\n    if (at <= System.currentTimeMillis()) { call.resolve(); return; }/' android/app/src/main/java/com/example/timers/TimerBridgePlugin.java
           python3 - <<'PY'
           import re
           p = "android/app/src/main/AndroidManifest.xml"
