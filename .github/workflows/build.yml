@@ -34,7 +34,21 @@ jobs:
           mkdir -p android/app/src/main/java
           cp -r native-android/java/com android/app/src/main/java/
           cp -r native-android/res/* android/app/src/main/res/
-          python3 patch_manifest.py
+          python3 - <<'PY'
+          import re
+          p = "android/app/src/main/AndroidManifest.xml"
+          s = open(p, encoding="utf-8").read()
+          if "TimerAlarmReceiver" in s:
+              raise SystemExit
+          snip = open("native-android/AndroidManifest-snippet.xml", encoding="utf-8").read()
+          snip = re.sub(r"<!--.*?-->", "", snip, flags=re.S)
+          parts = snip.split("<receiver", 1)
+          perms = parts[0].strip()
+          app = "<receiver" + parts[1]
+          s = s.replace("<application", perms + "\n    <application", 1)
+          s = s.replace("</application>", app.strip() + "\n    </application>", 1)
+          open(p, "w", encoding="utf-8").write(s)
+          PY
 
       - name: Build APK
         working-directory: timers-apk/android
